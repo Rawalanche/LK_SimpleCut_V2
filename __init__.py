@@ -100,6 +100,7 @@ def Cut(self, context):
     # Scene information
     region = context.region
     rv3d = context.region_data
+    sel_obj = self.selected_object
 
     if len(self.mouse_path) > 0:
         TopLeft = (self.mouse_path[0][0], self.mouse_path[0][1])
@@ -114,11 +115,19 @@ def Cut(self, context):
         BottomLeft,
     )
 
+    # Calculate bbox center of selected object. Multipled by 1/8 because bound_box returns array of 8 vectors.
+    local_bbox_center = 0.125 * sum((Vector(b) for b in sel_obj.bound_box), Vector())
+
+    # Convert bbox from local to world space
+    bbox_center = sel_obj.matrix_world @ local_bbox_center
+
+    # Location and normal for the intersection plan
+    plane_location = bbox_center
+    plane_normal = region_2d_to_vector_3d(region, rv3d, self.mouse_path[0])
+
     # Create a new empty bmesh
     cutter_bmesh = bmesh.new()
 
-    plane_normal = region_2d_to_vector_3d(region, rv3d, self.mouse_path[0])
-    plane_location = Vector((0.0, 0.0, 0.0))
     vertices_3d = []
 
     # Create faces from vertices and add them to the faces array
@@ -151,10 +160,11 @@ def Cut(self, context):
 
     # Add solidify modifier to cutter object and set its thickness
     solidify_modifier = cutter_object.modifiers.new(type="SOLIDIFY", name="CutterSolidify")
-    solidify_modifier.thickness = 1.0
+    solidify_modifier.thickness = sum(sel_obj.dimensions)
+    solidify_modifier.offset = 0.0
 
     # Add boolean modifier to selected object and set cutter as boolean object
-    boolean_modifier = self.selected_object.modifiers.new(type="BOOLEAN", name="CutterBoolean")
+    boolean_modifier = sel_obj.modifiers.new(type="BOOLEAN", name="CutterBoolean")
     boolean_modifier.object = cutter_object
 
     # Apply boolean modifier to (currently active) selected object
