@@ -66,14 +66,34 @@ class SimpleCut(bpy.types.Operator):
 
         else:
             self.selected_object = context.active_object
-            self.editing = False
+
             self.shape = 'RECTANGLE'
+
+            self.editing = False
+            self.close_polygon = False
+
+            self.shift = False
+
             context.window_manager.modal_handler_add(self)
             bpy.context.window.cursor_set("CROSSHAIR")
             return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         context.area.tag_redraw()
+
+        # [Shift]
+        self.shift = True if event.shift else False
+
+        # If we are in Polygon edit mode, continuously test if mouse cursor is near initial point
+        if self.shape is 'POLYGON' and self.editing is True:
+            # Compare distance from current mouse position to initial shape point
+            initial_point = Vector((self.mouse_path[0]))
+            current_point = Vector((event.mouse_region_x, event.mouse_region_y))
+            initial_point_distance = (current_point - initial_point).length
+            # We can close polygon only if we have at least 3 points (triangle)
+            self.close_polygon = initial_point_distance < 10 and len(self.mouse_path) > 2
+        else:
+            self.close_polygon = False
 
         # LMB behavior
         if event.type == 'LEFTMOUSE':
@@ -95,13 +115,9 @@ class SimpleCut(bpy.types.Operator):
             # Release
             elif event.value == 'RELEASE' and self.editing is True:
                 if self.shape is 'POLYGON':
-                    # Compare distance from current mouse position to initial shape point
-                    initial_point = Vector((self.mouse_path[0]))
-                    current_point = Vector((event.mouse_region_x, event.mouse_region_y))
-                    initial_point_distance = (current_point - initial_point).length
 
-                    # Perform cut if we are close to initial point and have at least 3 points (triangle)
-                    if initial_point_distance < 10 and len(self.mouse_path) > 2:
+                    # Perform cut if we can close polygon
+                    if self.close_polygon is True:
                         self.editing = False
                         self.mouse_path.pop()  # Removes last point from the mouse path
                         self.create_cutter_object(context, self.shape, self.mouse_path)
@@ -121,7 +137,20 @@ class SimpleCut(bpy.types.Operator):
         # Mouse move behavior
         elif event.type == 'MOUSEMOVE':
             if hasattr(self, 'mouse_path'):
-                self.mouse_path[len(self.mouse_path) - 1] = (event.mouse_region_x, event.mouse_region_y)
+                if self.shape is 'POLYGON' and self.shift is True:
+
+                    previous_point = Vector((self.mouse_path[len(self.mouse_path) - 2]))
+                    current_point = Vector((event.mouse_region_x, event.mouse_region_y))
+
+                    direction = Vector(((current_point - previous_point).normalized()).to_tuple(0))
+                    distance = (current_point - previous_point).length
+
+                    angle_snapped_point = direction * distance
+
+                    self.mouse_path[len(self.mouse_path) - 1] = previous_point + angle_snapped_point
+
+                else:
+                    self.mouse_path[len(self.mouse_path) - 1] = (event.mouse_region_x, event.mouse_region_y)
 
         # RMB behavior
         elif event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
@@ -198,7 +227,13 @@ class SimpleCut(bpy.types.Operator):
         # Create OpenGL shader
         shader = gpu.shader.from_builtin('2D_UNIFORM_COLOR')
         shader.bind()
-        shader.uniform_float("color", (0.8, 0.1, 0.1, 0.5))
+
+        if self.close_polygon is True:
+            line_color = (1.0, 1.0, 1.0, 0.5)
+        else:
+            line_color = (0.8, 0.1, 0.1, 0.5)
+
+        shader.uniform_float("color", line_color)
 
         # Get OpenGL draw mode and vertices to draw
         draw_mode, vertices = self.get_2d_shape(shape, mouse_path)
